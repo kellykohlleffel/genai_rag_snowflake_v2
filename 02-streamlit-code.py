@@ -3,12 +3,10 @@
 # Build a California Wine Country Travel Assistant Chatbot
 #
 
-
 import streamlit as st
 from snowflake.snowpark.context import get_active_session
 import pandas as pd
 import time
-
 
 # Change this list as needed to add/remove model capabilities.
 MODELS = [
@@ -25,65 +23,139 @@ MODELS = [
     "gemma-7b"
 ]
 
-# Change this value to control the number of tokens you allow the user to change to control RAG context. In
-# this context for the data used, 1 chunk would be approximately 200-400 tokens.  So a limit is placed here
-# so that the LLM does not abort if the context is too large.
+# Change this value to control the number of tokens
 CHUNK_NUMBER = [4,6,8,10,12,14,16]
 
+# Preset prompts
+WINERY_OVERVIEW_PROMPT = """Create a well-formatted comprehensive overview of the following winery:
 
+**Winery Name:** {winery}
+
+The overview should include:
+
+1. **Basic Information**:
+   - Location, including region and any notable geographical features.
+   - A brief history of the winery (e.g., founding date, founders, or mission).
+   - Specialties in wine production (e.g., types of wine, signature varietals).
+
+2. **Unique Characteristics and Offerings**:
+   - At least 5 unique features, activities, or experiences the winery offers.
+   - Any seasonal or recurring events.
+
+3. **Tasting Room and Tours**:
+   - Details about the tasting room ambiance.
+   - Information about guided tours, tastings, or other experiences.
+
+4. **Hospitality**:
+   - Unique amenities, such as picnic areas, accommodations, or partnerships.
+   - Pet and children policies and details.
+
+5. **Notable Recognition**:
+   - Awards, certifications, or mentions in media.
+
+6. **Pricing**:
+   - Cost range for tastings, tours, or special events.
+
+7. **Insider Tips**:
+   - Recommendations for visitors to make the most of their experience."""
+
+TRIP_PLAN_PROMPT = """Create a well-formatted, detailed and engaging travel guide for a 2-day wine country getaway, complete with a catchy itinerary name. The trip should include visits to {winery}.
+
+Please include:
+1. A unique name for this winery trip
+2. A logical day-by-day itinerary that visits the winery
+3. At least 5 unique characteristics or activities at the winery
+4. Recommended nearby restaurants for lunch and dinner
+5. Hotel recommendations for the overnight stay
+6. Other complementary activities
+7. Information about any pet-friendly features
+8. Tips for making the most of the visits
+9. Advice on what to wear for this time of year
+10. Estimated cost of the trip"""
+
+def get_winery_list(session):
+    """Fetch the list of wineries from Snowflake."""
+    winery_cmd = """
+    SELECT DISTINCT winery_or_vineyard 
+    FROM vineyard_data_vectors 
+    ORDER BY winery_or_vineyard
+    """
+    winery_df = session.sql(winery_cmd).to_pandas()
+    return winery_df['WINERY_OR_VINEYARD'].tolist()
+
+def on_preset_prompt_change():
+    """Handle preset prompt changes"""
+    if st.session_state.preset_prompt == "None":
+        # Clear both the full and display questions when None is selected
+        st.session_state.current_question = None
+        st.session_state.display_question = None
+    elif st.session_state.selected_winery:
+        if st.session_state.preset_prompt == "Winery Overview":
+            # Store the full prompt for processing
+            st.session_state.current_question = WINERY_OVERVIEW_PROMPT.format(winery=st.session_state.selected_winery)
+            # Store the simplified display version
+            st.session_state.display_question = f"Create a well-formatted comprehensive overview of {st.session_state.selected_winery}"
+        else:
+            # Store the full prompt for processing
+            st.session_state.current_question = TRIP_PLAN_PROMPT.format(winery=st.session_state.selected_winery)
+            # Store the simplified display version
+            st.session_state.display_question = f"Create a well-formatted, detailed and engaging travel guide for a 2-day wine country getaway, complete with a catchy itinerary name. The trip should include visits to {st.session_state.selected_winery}."
+    
 def build_layout():
-    #
-    # Builds the layout for the app side and main panels and return the question from the dynamic text_input control.
-    #
-
-
-    # Setup the state variables.
-    # Resets text input ID to enable it to be cleared since currently there is no native clear.
-    if 'reset_key' not in st.session_state: 
-        st.session_state.reset_key = 0
-    # Holds the list of responses so the user can see changes while selecting other models and settings.
+    # Initialize session state
     if 'conversation_state' not in st.session_state:
         st.session_state.conversation_state = []
+    if 'current_question' not in st.session_state:
+        st.session_state.current_question = None
+    if 'reset_key' not in st.session_state:
+        st.session_state.reset_key = 0
 
-
-    # Build the layout.
-    #
-    # Note:  Do not alter the manner in which the objects are laid out.  Streamlit requires this order because of references.
-    #
+    # Set page config - must be called first
     st.set_page_config(layout="wide")
+
+    # Build the layout
     st.title(":wine_glass: California Wine Country Visit Assistant :wine_glass:")
     st.write("""I'm an interactive California Wine Country Visit Assistant. A bit about me...I'm a RAG-based, Gen AI app **built 
       with and powered by Fivetran, Snowflake, Streamlit, and Cortex** and I use a custom, structured dataset!""")
-    st.caption("""Let me help plan your trip to California wine country. Using the dataset you just moved into the Snowflake Data 
-      Cloud with Fivetran, I'll assist you with winery and vineyard information and provide visit recommendations from numerous 
-      models available in Snowflake Cortex (including Claude 3.5 Sonnet). You can even pick the model you want to use or try out 
-      all the models. The dataset includes over **700 wineries and vineyards** across all CA wine-producing regions including the 
-      North Coast, Central Coast, Central Valley, South Coast and various AVAs sub-AVAs. Let's get started!""")
-    user_question_placeholder = "Message your personal CA Wine Country Visit Assistant..."
+    st.caption("""Let me help plan your trip to California wine country. Using the dataset you just moved into the Snowflake Data Cloud with Fivetran, I'll assist you with winery and vineyard information and provide visit recommendations from numerous models available in Snowflake Cortex (including Claude 3.5 Sonnet). You can even pick the model you want to use or try out all the models. The dataset includes over 700 wineries and vineyards across all CA wine-producing regions including the North Coast, Central Coast, Central Valley, South Coast and various AVAs sub-AVAs. Let's get started!""")
+
+    # Sidebar components
     st.sidebar.selectbox("Select a Snowflake Cortex model:", MODELS, key="model_name")
-    st.sidebar.checkbox('Use your Fivetran dataset as context?', key="dataset_context", help="""This turns on RAG where the 
-    data replicated by Fivetran and curated in Snowflake will be used to add to the context of the LLM prompt.""")
-    if st.button('Reset conversation', key='reset_conversation_button'):
+    st.sidebar.checkbox('Use your Fivetran dataset as context?', key="dataset_context")
+
+    # Winery search feature
+    wineries = get_winery_list(session)
+    st.sidebar.selectbox(
+        "Search for a specific winery:",
+        options=[""] + wineries,  # Add empty option as first choice
+        key="selected_winery",
+        help="Type to search for a specific winery"
+    )
+
+    # Preset prompt selection
+    if st.session_state.get('selected_winery') and st.session_state.get('selected_winery') != "":
+        st.sidebar.radio(
+            "Select a preset prompt:",
+            options=["None", "Winery Overview", "Trip Plan"],
+            key="preset_prompt",
+            on_change=on_preset_prompt_change,
+            help="Select a preset prompt to generate information about the selected winery"
+        )
+
+    # Reset conversation button
+    if st.button('Reset conversation'):
         st.session_state.conversation_state = []
-        st.session_state.reset_key += 1
+        st.session_state.current_question = None
+        st.session_state.display_question = None
+        st.session_state.reset_key += 1  # Add this
         st.rerun()
-    processing_placeholder = st.empty()
-    question = st.text_input("", placeholder=user_question_placeholder, key=f"text_input_{st.session_state.reset_key}", 
-                             label_visibility="collapsed")
-    if st.session_state.dataset_context:
-        st.caption("""Please note that :green[**_I am_**] using your Fivetran dataset as context. All models are very 
-          creative and can make mistakes. Consider checking important information before heading out to wine country.""")
-    else:
-        st.caption("""Please note that :red[**_I am NOT_**] using your Fivetran dataset as context. All models are very 
-          creative and can make mistakes. Consider checking important information before heading out to wine country.""")
+
+    # Advanced options
     with st.sidebar.expander("Advanced Options"):
-        st.selectbox("Select number of context chunks:", CHUNK_NUMBER, key="num_retrieved_chunks", help="""Adjust based on the 
-        expected number of records/chunks of your data to be sent with the prompt before Cortext calls the LLM.""", index=1)
-    st.sidebar.caption("""I use **Snowflake Cortex** which provides instant access to industry-leading large language models (LLMs), 
-      including Claude, Llama, and Snowflake Arctic that have been trained by researchers at companies like Anthropic, Meta, Mistral, Google, Reka, and Snowflake.\n\nCortex 
-      also offers models that Snowflake has fine-tuned for specific use cases. Since these LLMs are fully hosted and managed by 
-      Snowflake, using them requires no setup. My data stays within Snowflake, giving me the performance, scalability, and governance 
-      you expect.""")
+        st.selectbox("Select number of context chunks:", CHUNK_NUMBER, key="num_retrieved_chunks")
+
+    # Sidebar caption and logo
+    st.sidebar.caption("""I use **Snowflake Cortex** which provides instant access to industry-leading large language models including Claude, Llama, and Snowflake Arctic that have been trained by researchers at companies like Anthropic, Meta, Mistral, Google, Reka, and Snowflake.""")
     for _ in range(6):
         st.sidebar.write("")
     url = 'https://i.imgur.com/9lS8Y34.png'
@@ -94,20 +166,30 @@ def build_layout():
     with caption_col2:
         st.caption("Fivetran, Snowflake, Streamlit, & Cortex")
 
+    # Main content area
+    processing_placeholder = st.empty()
+    text_input = st.text_input(
+        "",
+        placeholder="Message your personal CA Wine Country Visit Assistant...",
+        key=f"text_input_{st.session_state.reset_key}",  # Modify this
+        label_visibility="collapsed"
+    )
 
-    return question
+    # Dataset context caption
+    if st.session_state.dataset_context:
+        st.caption("""Please note that :green[**_I am_**] using your Fivetran dataset as context. All models are very 
+          creative and can make mistakes. Consider checking important information before heading out to wine country.""")
+    else:
+        st.caption("""Please note that :red[**_I am NOT_**] using your Fivetran dataset as context. All models are very 
+          creative and can make mistakes. Consider checking important information before heading out to wine country.""")
 
+    # Return the text input if no preset prompt is selected, otherwise return the preset prompt
+    return text_input if st.session_state.get('preset_prompt') == "None" or not st.session_state.get('current_question') else st.session_state.current_question
 
-def build_prompt (question):
-    #
-    # Format the prompt based on if the user chooses to use the RAG option or not.
-    #
-
-
-    # Build the RAG prompt if the user chooses.  Defaulting the similarity to 0 -> 1 for better matching.
+def build_prompt(question):
+    # Build the RAG prompt if the user chooses
     chunks_used = []
     if st.session_state.dataset_context:
-        # Get the RAG records.
         context_cmd = f"""
           with context_cte as
           (select winery_or_vineyard, winery_information as winery_chunk, vector_cosine_similarity(winery_embedding,
@@ -121,25 +203,23 @@ def build_prompt (question):
         chunk_limit = st.session_state.num_retrieved_chunks
         context_df = session.sql(context_cmd, params=[question, chunk_limit]).to_pandas()
         context_len = len(context_df) -1
-        # Add the vineyard names to a list to be displayed later.
         chunks_used = context_df['WINERY_OR_VINEYARD'].tolist()
-        # Build the additional prompt context using the wine dataset.
+        
         rag_context = ""
-        for i in range (0, context_len):
+        for i in range(0, context_len):
             rag_context += context_df.loc[i, 'WINERY_CHUNK']
         rag_context = rag_context.replace("'", "''")
-        # Construct the prompt.
+        
         new_prompt = f"""
           Act as a California winery visit expert for visitors to California wine country who want an incredible visit and 
           tasting experience. You are a personal visit assistant named Snowflake CA Wine Country Visit Assistant. Provide 
           the most accurate information on California wineries based only on the context provided. Only provide information 
-          if there is an exact match below.  Do not go outside the context provided.  
+          if there is an exact match below. Do not go outside the context provided.  
           Context: {rag_context}
           Question: {question} 
           Answer: 
           """
     else:
-        # Construct the generic version of the prompt without RAG to only go against what the LLM was trained.
         new_prompt = f"""
           Act as a California winery visit expert for visitors to California wine country who want an incredible visit and 
           tasting experience. You are a personal visit assistant named Snowflake CA Wine Country Visit Assistant. Provide 
@@ -148,86 +228,67 @@ def build_prompt (question):
           Answer: 
           """
 
-
     return new_prompt, chunks_used
 
-
 def get_model_token_count(prompt_or_response) -> int:
-    #
-    # Calculate and return the token count for the model and prompt or response.
-    #
     token_count = 0
     try:
         token_cmd = f"""select SNOWFLAKE.CORTEX.COUNT_TOKENS(?, ?) as token_count;"""
         tc_data = session.sql(token_cmd, params=[st.session_state.model_name, prompt_or_response]).collect()
         token_count = tc_data[0][0]
     except Exception:
-        # Negative value just denoting that tokens could not be counted for some reason.
         token_count = -9999
-
 
     return token_count
 
-
 def calc_times(start_time, first_token_time, end_time, token_count):
-    #
-    # Calculate the times for the execution steps.
-    #
-
-
-    # Calculate the correct durations
-    time_to_first_token = first_token_time - start_time  # Time to the first token
-    total_duration = end_time - start_time  # Total time to generate all tokens
-    time_for_remaining_tokens = total_duration - time_to_first_token  # Time for the remaining tokens
+    time_to_first_token = first_token_time - start_time
+    total_duration = end_time - start_time
+    time_for_remaining_tokens = total_duration - time_to_first_token
     
-    # Calculate tokens per second rate
     tokens_per_second = token_count / total_duration if total_duration > 0 else 1
     
-    # Ensure that time to first token is realistically non-zero
-    if time_to_first_token < 0.01:  # Adjust the threshold as needed
-        time_to_first_token = total_duration / 2  # A rough estimate if it's too small
-
+    if time_to_first_token < 0.01:
+        time_to_first_token = total_duration / 2
 
     return time_to_first_token, time_for_remaining_tokens, tokens_per_second
 
-
 def run_prompt(question):
-    #
-    # Run the prompt against Cortex.
-    #
-    formatted_prompt, chunks_used = build_prompt (question)
+    formatted_prompt, chunks_used = build_prompt(question)
     token_count = get_model_token_count(formatted_prompt)
     start_time = time.time()
+    
     cortex_cmd = f"""
              select SNOWFLAKE.CORTEX.COMPLETE(?,?) as response
            """    
     sql_resp = session.sql(cortex_cmd, params=[st.session_state.model_name, formatted_prompt])
-    first_token_time = time.time() 
+    first_token_time = time.time()
     answer_df = sql_resp.collect()
     end_time = time.time()
-    time_to_first_token, time_for_remaining_tokens, tokens_per_second = calc_times(start_time, first_token_time, end_time, token_count)
-
+    
+    time_to_first_token, time_for_remaining_tokens, tokens_per_second = calc_times(
+        start_time, first_token_time, end_time, token_count)
 
     return answer_df, time_to_first_token, time_for_remaining_tokens, tokens_per_second, int(token_count), chunks_used
 
-
 def main():
-    #
-    # Controls the flow of the app.
-    #
     question = build_layout()
+    
     if question:
         with st.spinner("Thinking..."):
             try:
-                # Run the prompt.
-                token_count = 0
+                # Run the prompt using the full question
                 data, time_to_first_token, time_for_remaining_tokens, tokens_per_second, token_count, chunks_used = run_prompt(question)
                 response = data[0][0]
-                # Add the response token count to the token total so we get a better prediction of the costs.
+                
                 if response:
                     token_count += get_model_token_count(response)
-                    # Conditionally append the token count line based on the checkbox
                     rag_delim = ", "
+                    
+                    # Use the display question if it exists, otherwise use the original question
+                    display_question = st.session_state.get('display_question') if st.session_state.get('display_question') else question
+                    
+                    # Append conversation state
                     st.session_state.conversation_state.append(
                         (f":information_source: RAG Chunks/Records Used:",
                          f"""<span style='color:#808080;'> {(rag_delim.join([str(ele) for ele in chunks_used])) if chunks_used else 'none'} 
@@ -238,29 +299,29 @@ def main():
                          f"""<span style='color:#808080;'>{token_count} tokens :small_blue_diamond: {tokens_per_second:.2f} tokens/s :small_blue_diamond: 
                          {time_to_first_token:.2f}s to first token + {time_for_remaining_tokens:.2f}s.</span>""")
                     )
-                    # Append the new results.
-                    st.session_state.conversation_state.append((f"CA Wine Country Visit Assistant ({st.session_state.model_name}):", response))
-                    st.session_state.conversation_state.append(("You:", question))
+                    st.session_state.conversation_state.append(
+                        (f"CA Wine Country Visit Assistant ({st.session_state.model_name}):", response)
+                    )
+                    st.session_state.conversation_state.append(("You:", display_question))
+                    
+                    # Clear the current questions after processing
+                    st.session_state.current_question = None
+                    st.session_state.display_question = None
+                    
             except Exception as e:
                 st.warning(f"An error occurred while processing your question: {e}")
-        
-        # Display the results in a stacked format.
+                
+        # Display conversation history
         if st.session_state.conversation_state:
             for i in reversed(range(len(st.session_state.conversation_state))):
                 label, message = st.session_state.conversation_state[i]
                 if 'Token Count' in label or 'RAG Chunks' in label:
-                    # Display the token count in a specific format
                     st.markdown(f"**{label}** {message}", unsafe_allow_html=True)
                 elif i % 2 == 0:
                     st.write(f":wine_glass:**{label}** {message}")
                 else:
                     st.write(f":question:**{label}** {message}")
 
-
 if __name__ == "__main__":
-    #
-    # App startup method.
-    #
     session = get_active_session()
-    
     main()
