@@ -11,6 +11,10 @@ This repo provides the high-level steps to create a RAG-based, Gen AI travel ass
     * The winery overview preset generates a structured profile covering key aspects like location, history, specialties, experiences, hospitality, awards and pricing - all tailored to the selected winery from the dropdown.
     * The trip plan preset creates a complete 2-day wine country itinerary centered around the selected winery, including nearby dining, accommodations, activities, and practical tips for making the most of the visit.
 
+### Streamlit Data App updates
+![Travel Assistant Updates](./images/genai_travelassistant_featurezoom.png)
+
+
 ### STEP 0: Prerequisite - Access the Fivetran lab account
 
 * For this hands-on workshop, we have provisioned you into a Fivetran Account specifically for this lab. Let’s access it now.
@@ -553,8 +557,7 @@ Structure your response with clear headings and a well-organized format. Ensure 
 * Tony Kelly Pamont Vineyards
 
 ### Fivetran + Snowflake California Wine Country Visit Assistant
-
-![Travel Assistant Screenshot](./images/2024-10-10%20Streamlit%20-%20Travel%20Assistant.png)
+![Travel Assistant Screenshot](./images/genai_travelassistant_v2.png)
 
 -----
 
